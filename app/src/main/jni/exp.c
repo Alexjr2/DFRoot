@@ -417,10 +417,10 @@ static int patch_ko(struct Reporter *reporter) {
         uint8_t verify[16];
         int vfd = open(kCrashDump, O_RDONLY);
         if (vfd >= 0) {
-            ssize_t n = pread(vfd, verify, 16, 0);
+            ssize_t n = pread(vfd, verify, 16, 16);
             close(vfd);
-            if (n == 16 && memcmp(verify, sh_buf, 16) != 0) {
-                REPORTLN("patch #1 verify FAILED: page cache not modified");
+            if (n == 16 && memcmp(verify, sh_buf + 16, 16) != 0) {
+                REPORTLN("patch #1 verify FAILED: page cache not modified (known issue on android14-6.1)");
                 free(sh_buf);
                 return -1;
             }
