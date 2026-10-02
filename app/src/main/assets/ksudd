@@ -1,0 +1,13 @@
+#!/system/bin/sh
+
+KSUD=$(find /data/app -path '*/com.resukisu.resukisu*/lib/arm64/libksud.so' 2>/dev/null | head -1)
+if [ -z "$KSUD" ]; then
+    KSUD=/data/adb/ksu/bin/ksud
+fi
+if [ ! -f "$KSUD" ]; then
+    exit 1
+fi
+chmod 755 "$KSUD" 2>/dev/null
+KVER=$(uname -r | cut -d. -f1-2)
+AVER=$(uname -r | grep -o 'android[0-9]*')
+exec "$KSUD" late-load --kmi "${AVER}-${KVER}"
