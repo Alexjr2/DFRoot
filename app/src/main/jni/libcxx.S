@@ -23,16 +23,10 @@ exe_path:
 ko_target:
     .ascii "/vendor/lib64/libbinderdebug.so\0"
     .skip 32, 0                             /* pad to 64 bytes — longest candidate path */
-param_soft_reboot:
-    .asciz "soft_reboot=1"
-
     .balign 4
     .global libcxx_ko_target_off
 libcxx_ko_target_off:
     .int ko_target - libcxx_data
-    .global libcxx_soft_reboot_off
-libcxx_soft_reboot_off:
-    .int (param_soft_reboot + 12) - libcxx_data
 
     .align 4
 
@@ -118,14 +112,12 @@ libcxx_start:
     mov     x8, #SYS_write
     svc     0
 
-    // execve("/vendor/bin/insmod", [exe_path, ko_target, ["soft_reboot=1",] NULL], NULL)
+    // execve("/vendor/bin/insmod", [exe_path, ko_target, NULL], NULL)
     adr     x1, exe_path
     str     x1, [sp]
     adr     x1, ko_target
     str     x1, [sp, 8]
-    adr     x1, param_soft_reboot
-    str     x1, [sp, 16]
-    str     xzr, [sp, 24]
+    str     xzr, [sp, 16]
 do_insmod:
     adr     x0, exe_path
     mov     x1, sp
