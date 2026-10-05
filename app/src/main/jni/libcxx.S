@@ -32,9 +32,7 @@ libcxx_ko_target_off:
     .int ko_target - libcxx_data
     .global libcxx_soft_reboot_off
 libcxx_soft_reboot_off:
-    .int soft_reboot_flag - libcxx_data
-soft_reboot_flag:
-    .byte 0
+    .int (param_soft_reboot + 12) - libcxx_data
 
     .align 4
 
@@ -125,15 +123,9 @@ libcxx_start:
     str     x1, [sp]
     adr     x1, ko_target
     str     x1, [sp, 8]
-    adr     x9, soft_reboot_flag
-    ldrb    w9, [x9]
-    cbz     w9, insmod_no_sr
     adr     x1, param_soft_reboot
     str     x1, [sp, 16]
     str     xzr, [sp, 24]
-    b       do_insmod
-insmod_no_sr:
-    str     xzr, [sp, 16]
 do_insmod:
     adr     x0, exe_path
     mov     x1, sp

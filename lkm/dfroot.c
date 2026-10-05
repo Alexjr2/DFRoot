@@ -3,6 +3,8 @@
 #include <linux/kmod.h>
 #include <linux/kprobes.h>
 #include <linux/module.h>
+#include <linux/namei.h>
+#include <linux/pagemap.h>
 #include <linux/ptrace.h>
 
 MODULE_LICENSE("GPL");
@@ -13,8 +15,14 @@ typedef void *(*umh_setup_t)(const char *path, char **argv, char **envp, gfp_t g
                              void *init, void *cleanup, void *data);
 typedef int (*umh_exec_t)(void *info, int wait);
 
-static int soft_reboot;
-module_param(soft_reboot, int, 0);
+static void drop_path_cache(const char *path)
+{
+    struct path p;
+    if (kern_path(path, LOOKUP_FOLLOW, &p))
+        return;
+    invalidate_inode_pages2(p.dentry->d_inode->i_mapping);
+    path_put(&p);
+}
 
 static int defex_pre_handler(struct kprobe *p, struct pt_regs *regs)
 {
@@ -36,15 +44,12 @@ static int __nocfi __init dirtyfrag_init(void)
     void *info;
     int ret;
 
-    static const char sh[]   = "/system/bin/sh";
-    static const char ksud[] = "/data/user_de/0/df.root/ksud";
-    static char cmd[256];
+    static const char sh[]        = "/system/bin/sh";
+    static const char bootstrap[] = "/data/user_de/0/df.root/bootstrap";
+    static char cmd[128];
     static char *envp[] = { "PATH=/system/bin", NULL };
     static char *argv[] = { (char *)sh, "-c", cmd, NULL };
-    snprintf(cmd, sizeof(cmd),
-             "%s late-load --package-name me.weishu.kernelsu --ro-partitions%s"
-             " && touch /dev/dfm0 || touch /dev/dfm1",
-             ksud, soft_reboot ? " --soft-reboot" : "");
+    snprintf(cmd, sizeof(cmd), "%s", bootstrap);
 
     kln_kp = (struct kprobe){ .symbol_name = "kallsyms_lookup_name" };
     if (register_kprobe(&kln_kp) < 0) {
@@ -93,10 +98,13 @@ static int __nocfi __init dirtyfrag_init(void)
     ((struct subprocess_info *)info)->path = sh;
 
     ret = umh_exec(info, UMH_WAIT_PROC);
-    pr_info("dfroot: usermodehelper_exec(%s) returned %d\n", ksud, ret);
+    pr_info("dfroot: usermodehelper_exec(%s) returned %d\n", bootstrap, ret);
 
     if (defex_kp.addr) unregister_kprobe(&defex_kp);
     if (umh_kp.addr)   unregister_kprobe(&umh_kp);
+
+    drop_path_cache("/apex/com.android.runtime/bin/crash_dump64");
+
     return -E2BIG; /* return any error to unload module */
 }
 
