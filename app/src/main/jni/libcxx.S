@@ -97,7 +97,6 @@ libcxx_start:
     mov     x4, xzr
     mov     x8, #SYS_clone
     svc     0
-    str     w0, [sp, 24]
     cbnz    w0, myexit
 
     // ── grandchild: insmod the KO as vendor_modprobe ──────────────────────
@@ -118,7 +117,6 @@ libcxx_start:
     adr     x1, ko_target
     str     x1, [sp, 8]
     str     xzr, [sp, 16]
-do_insmod:
     adr     x0, exe_path
     mov     x1, sp
     mov     x2, xzr
