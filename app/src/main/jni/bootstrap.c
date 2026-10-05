@@ -11,7 +11,21 @@
 #define BLKROSET   0x125d
 #define KSUD       "/data/user_de/0/df.root/ksud"
 #define PREFS_PATH "/data/user_de/0/df.root/shared_prefs/dfroot.xml"
-static int read_prefs(char *su_manager, size_t su_manager_size, int *soft_reboot)
+#define MODULES_DIR "/data/adb/modules"
+
+static int pref_true(const char *buf, const char *key)
+{
+    char needle[64];
+    snprintf(needle, sizeof(needle), "name=\"%s\"", key);
+    char *p = strstr(buf, needle);
+    if (!p) return 0;
+    char *tag_end = strchr(p, '>');
+    char *v = strstr(p, "value=\"true\"");
+    return v && tag_end && v < tag_end;
+}
+
+static int read_prefs(char *su_manager, size_t su_manager_size, int *soft_reboot,
+                      int *disable_modules)
 {
     int fd = open(PREFS_PATH, O_RDONLY);
     if (fd < 0) return -1;
@@ -32,14 +46,8 @@ static int read_prefs(char *su_manager, size_t su_manager_size, int *soft_reboot
     memcpy(su_manager, p, len);
     su_manager[len] = '\0';
 
-    char *bp = strstr(buf, "name=\"soft_reboot\"");
-    if (bp) {
-        char *bend = strchr(bp, '>');
-        char *v    = strstr(bp, "value=\"true\"");
-        *soft_reboot = v && bend && v < bend ? 1 : 0;
-    } else {
-        *soft_reboot = 0;
-    }
+    *soft_reboot = pref_true(buf, "soft_reboot");
+    *disable_modules = pref_true(buf, "disable_modules");
 
     return 0;
 }
@@ -127,11 +135,30 @@ static void touch(const char *path)
         close(fd);
 }
 
+/* Mark every installed module disabled before ksud runs. A broken module
+ * otherwise loads on the next boot and bootloops the device. */
+static void disable_modules(void)
+{
+    DIR *dir = opendir(MODULES_DIR);
+    if (!dir)
+        return;
+
+    struct dirent *ent;
+    while ((ent = readdir(dir))) {
+        if (ent->d_name[0] == '.')
+            continue;
+        char path[256];
+        snprintf(path, sizeof(path), MODULES_DIR "/%s/disable", ent->d_name);
+        touch(path);
+    }
+    closedir(dir);
+}
+
 int main(void)
 {
     char su_manager[256];
-    int soft_reboot;
-    if (read_prefs(su_manager, sizeof(su_manager), &soft_reboot) != 0) {
+    int soft_reboot, disable_mods;
+    if (read_prefs(su_manager, sizeof(su_manager), &soft_reboot, &disable_mods) != 0) {
         touch("/dev/dfm6");
         return 1;
     }
@@ -142,6 +169,9 @@ int main(void)
 
     set_partitions_ro();
     touch("/dev/dfm3");
+
+    if (disable_mods)
+        disable_modules();
 
     char **late_load;
     if (soft_reboot)

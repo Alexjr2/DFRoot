@@ -23,6 +23,7 @@ If you have a custom KernelSU fork to work with specific manufacturers please ma
 - Automatic soft reboot
 - RO Partition Protection
 - Hide Selinux Modifications in KSU
+- Disable all KernelSU modules, to recover from a broken one
 - Shizuku not needed — regain root without WiFi!
 
 > [!WARNING]
