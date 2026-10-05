@@ -55,7 +55,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 .setMessage(
                     "SU Manager is not installed.\n\n" +
                     "Samsung devices: install from github.com/diabl0w/KernelSU\n\n" +
-                    "Other devices: install from github.com/tiann/KernelSU")
+                    "Other devices: github.com/tiann/KernelSU, github.com/KernelSU-Next/KernelSU-Next, or github.com/KOWX712/KernelSU")
                 .setCancelable(false)
                 .setPositiveButton("Exit", (d, w) -> finish())
                 .show();
