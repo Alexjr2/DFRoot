@@ -380,12 +380,12 @@ static int patch_ko(void) {
 static void cleanup(void) {
     printf("=== cleanup ===\n");
     if (!g_libcxx_r.valid) return;
-    printf("* restore shellcode in %s\n", g_libcxx_r.lib);
-    patch_file_cbc(g_libcxx_r.lib, g_libcxx_r.shell_orig, g_libcxx_r.shell_padded,
-                   (size_t)g_libcxx_r.shell_off, 0);
     printf("* restore trampoline in %s\n", g_libcxx_r.lib);
     patch_file_cbc(g_libcxx_r.lib, (char *)g_libcxx_r.tramp_orig, 16,
                    (size_t)g_libcxx_r.tramp_aligned, 0);
+    printf("* restore shellcode in %s\n", g_libcxx_r.lib);
+    patch_file_cbc(g_libcxx_r.lib, g_libcxx_r.shell_orig, g_libcxx_r.shell_padded,
+                   (size_t)g_libcxx_r.shell_off, 0);
 }
 
 int find_hook_target(const char *lib, const char *sym,
