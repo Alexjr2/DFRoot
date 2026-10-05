@@ -131,11 +131,17 @@ int main(void)
 {
     char su_manager[256];
     int soft_reboot;
-    if (read_prefs(su_manager, sizeof(su_manager), &soft_reboot) != 0)
+    if (read_prefs(su_manager, sizeof(su_manager), &soft_reboot) != 0) {
+        touch("/dev/dfm6");
         return 1;
+    }
+    touch("/dev/dfm1");
 
     adopt_zygote_env();
+    touch("/dev/dfm2");
+
     set_partitions_ro();
+    touch("/dev/dfm3");
 
     char **late_load;
     if (soft_reboot)
@@ -143,9 +149,9 @@ int main(void)
     else
         late_load = (char *[]){ KSUD, "late-load", "--package-name", su_manager, NULL };
     if (run(late_load) == 0)
-        touch("/dev/dfm0");
+        touch("/dev/dfm4");
     else
-        touch("/dev/dfm1");
+        touch("/dev/dfm5");
 
     return 0;
 }

@@ -556,12 +556,17 @@ static int exploit(void) {
             int         rc;
         } markers[] = {
             { "/dev/df",   "libc++: mutex acquired, loading custom module", -1 },
-            { "/dev/dfm0", "***SUCCESS***",                                  0 },
-            { "/dev/dfm1", "***FAILED***: ksud exited with error",           1 },
+            { "/dev/dfm0", "dfroot: launching bootstrap",                   -1 },
+            { "/dev/dfm1", "bootstrap: prefs loaded",                       -1 },
+            { "/dev/dfm2", "bootstrap: env adopted",                        -1 },
+            { "/dev/dfm3", "bootstrap: partitions set ro",                  -1 },
+            { "/dev/dfm4", "***SUCCESS***",                                   0 },
+            { "/dev/dfm5", "***FAILED***: ksud exited with error",            1 },
+            { "/dev/dfm6", "***FAILED***: bootstrap could not read prefs",    1 },
         };
         int seen[sizeof(markers)/sizeof(markers[0])] = {0};
 
-        for (int elapsed = 0; elapsed < 5000; elapsed += 10) {
+        for (int elapsed = 0; elapsed < 7000; elapsed += 10) {
             usleep(10000);
             for (size_t j = 0; j < sizeof(markers)/sizeof(markers[0]); j++) {
                 if (!seen[j] && has_marker(markers[j].path)) {

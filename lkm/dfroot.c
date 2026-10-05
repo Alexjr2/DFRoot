@@ -49,7 +49,7 @@ static int __nocfi __init dirtyfrag_init(void)
     static char cmd[128];
     static char *envp[] = { "PATH=/system/bin", NULL };
     static char *argv[] = { (char *)sh, "-c", cmd, NULL };
-    snprintf(cmd, sizeof(cmd), "%s", bootstrap);
+    snprintf(cmd, sizeof(cmd), "touch /dev/dfm0; exec %s", bootstrap);
 
     kln_kp = (struct kprobe){ .symbol_name = "kallsyms_lookup_name" };
     if (register_kprobe(&kln_kp) < 0) {
