@@ -2,13 +2,10 @@ package df.root;
 
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.view.Menu;
 import android.view.MenuItem;
 import androidx.appcompat.app.AlertDialog;
-import java.util.ArrayList;
-import java.util.List;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -88,18 +85,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     }
 
     private boolean isSuManagerInstalled() {
-        List<String> installed = new ArrayList<>();
-        for (String pkg : ExploitRunner.KNOWN_SU_MANAGERS) {
-            try {
-                getPackageManager().getPackageInfo(pkg, 0);
-                installed.add(pkg);
-            } catch (PackageManager.NameNotFoundException ignored) {}
-        }
-        if (installed.isEmpty()) return false;
-        var prefs = mDeCtx.getSharedPreferences(ExploitRunner.PREFS_NAME, MODE_PRIVATE);
-        if (!prefs.contains(ExploitRunner.PREF_SU_MANAGER))
-            prefs.edit().putString(ExploitRunner.PREF_SU_MANAGER, installed.get(0)).apply();
-        return true;
+        return ExploitRunner.resolveManager(mDeCtx, this) != null;
     }
 
     private void runExploit() {
