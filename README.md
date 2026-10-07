@@ -16,7 +16,15 @@ A: Sorry, there is no fix. Either:
 
 **Q: Log says "SUCCESS" or "ksud exited with error", but I don't have root**
 
-A: https://github.com/diabl0w/DFRoot/discussions/69
+A: First, try disabling "Auto Soft Reboot" in DFRoot settings if you have it enabled, otherwise https://github.com/diabl0w/DFRoot/discussions/69
+
+**Q: I installed a module and now I can't launch root without crashing**
+
+A: Toggle "Disable KSU Modules" in DFRoot settings
+
+**Q: I installed a module and have "Start at Boot" enabled and now I am bootlooping**
+
+A: Typically Android will detect bootloops and boot you into Safe Mode, otherwise you can usually hold the Volume Down button during boot to enter safe mode. From there, disable "Start on Boot" and enable "Disable KSU Modules" in DFRoot settings or just uninstall DFRoot until you stabilize.
 
 ## Usage
 

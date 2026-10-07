@@ -183,13 +183,14 @@ int main(void)
     if (disable_mods && disable_modules() != 0)
         touch("/dev/dfmw2");
 
+    touch("/dev/dfm4");
     char **late_load;
     if (soft_reboot)
         late_load = (char *[]){ KSUD, "late-load", "--package-name", su_manager, "--soft-reboot", NULL };
     else
         late_load = (char *[]){ KSUD, "late-load", "--package-name", su_manager, NULL };
     if (run(late_load) == 0)
-        touch("/dev/dfm4");
+        touch("/dev/dfm5");
     else
         touch("/dev/dfme1");
 

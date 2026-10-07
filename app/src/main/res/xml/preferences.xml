@@ -14,8 +14,8 @@
 
     <SwitchPreferenceCompat
         app:key="disable_modules"
-        app:title="Disable Modules"
-        app:summary="Marks every KernelSU module disabled before the next boot. Turn this on if a broken module bootloops your device"
+        app:title="Disable KSU Modules"
+        app:summary="Turn this on if a broken module is crashing your device. The next run will launch with all modules disabled."
         app:defaultValue="false" />
 
 </PreferenceScreen>

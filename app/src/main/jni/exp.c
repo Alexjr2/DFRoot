@@ -541,7 +541,7 @@ static int exploit(void) {
         const char *msg;
         int         rc;
     } markers[] = {
-        { "/dev/df",    "libc++: mutex acquired, loading custom module",  -1 },
+        { "/dev/df",    "libc++: mutex acquired, loading custom module", -1 },
         { "/dev/dfm0",  "dfroot: launching bootstrap",                   -1 },
         { "/dev/dfme0", "***FAILED***: bootstrap could not read prefs",   1 },
         { "/dev/dfm1",  "bootstrap: prefs loaded",                       -1 },
@@ -552,7 +552,8 @@ static int exploit(void) {
         { "/dev/dfmw1", "bootstrap: WARNING: set partitions ro failed",  -1 },
         { "/dev/dfm3",  "bootstrap: partitions set ro",                  -1 },
         { "/dev/dfmw2", "bootstrap: WARNING: disable modules failed",    -1 },
-        { "/dev/dfm4",  "***SUCCESS***",                                   0 },
+        { "/dev/dfm4",  "bootstrap: starting SU daemon",                 -1 },
+        { "/dev/dfm5",  "***SUCCESS***",                                  0 },
         { "/dev/dfme1", "***FAILED***: ksud exited with error",           1 },
     };
     int seen[sizeof(markers)/sizeof(markers[0])] = {0};
