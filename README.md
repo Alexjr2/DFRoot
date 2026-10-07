@@ -1,56 +1,52 @@
 # DFRoot [DirtyFrag (CVE-2026-43284)]
 
+DFRoot is an Android rooting tool that exploits CVE-2026-43284 (DirtyFrag) — a kernel page cache write primitive — to load a custom kernel module without requiring an unlocked bootloader. It is intentionally designed to be SU Manager agnostic and works with any KernelSU-compatible SU manager.
+
 > [!IMPORTANT]
-> Before hitting that fork button, consider making a pull request instead :) 
+> Before hitting that fork button, consider making a pull request instead :)
 
-## Announcements
+## FAQ
 
-DFRoot v3.0 is a major rewrite compared to previous versions 
-It is now **modular**! Meaning it will utilize whichever KernelSU Manager you have installed. 
-If you have a custom KernelSU fork to work with specific manufacturers please make a pull request to add it here: 
-  - Samsung: https://github.com/diabl0w/KernelSU/releases/latest
-  - KernelSU-Next: https://github.com/KernelSU-Next/KernelSU-Next/releases/latest
-  - KowSU: https://github.com/KOWX712/KernelSU/releases/latest
-  - Others: can try official https://github.com/tiann/KernelSU/releases/latest
+**Q: Log says patching failed and that my device isn't vulnerable**
 
+A: Sorry, there is no fix. Either:
+  - Your device's kernel is too new
+  - Your device manufacturer backported the official mitigation
+  - [Accidental mitigation](https://github.com/V4bel/dirtyfrag/issues/23#issuecomment-4405314290) (typically seen on kernel 6.1)
+
+**Q: Log says "SUCCESS" or "ksud exited with error", but I don't have root**
+
+A: https://github.com/diabl0w/DFRoot/discussions/69
 
 ## Usage
-
-  1. Install the proper KernelSU Manager version for your device above 
-  2. Install DFRoot
-
-## Features
-
-- Start on Boot
-- Automatic soft reboot
-- RO Partition Protection
-- Hide Selinux Modifications in KSU
-- Disable all KernelSU modules, to recover from a broken one
-- Shizuku not needed — regain root without WiFi!
 
 > [!WARNING]
 > I am not responsible for any damage to your device.
 
-## Supported Devices
+1. Install [DFRoot](https://github.com/diabl0w/DFRoot/releases/latest)
+2. Install a SU Manager from below:
+   - Samsung:
+     - [diabl0w's KernelSU](https://github.com/diabl0w/KernelSU/releases/latest)
+   - Other:
+     - [KernelSU](https://github.com/tiann/KernelSU/releases/latest)
+     - [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases/latest)
+     - [KowSU](https://github.com/KOWX712/KernelSU/releases/latest)
 
-Ephemeral root for Samsung devices (and possibly others) w/ locked bootloaders vulnerable to DirtyFrag (CVE-2026-43284) 
+> If you have a custom KernelSU fork for a specific manufacturer, please make a pull request to add it here.
 
-| KMI Version | Verified |
-|---|---|
-| android12-5.10 | Yes |
-| android13-5.10 | Untested |
-| android13-5.15 | Yes |
-| android14-5.15 | Untested |
-| android14-6.1 | Not working - [accidental mitigation](https://github.com/V4bel/dirtyfrag/issues/23#issuecomment-4405314290) |
-| android15-6.6 | Yes |
-| android16-6.12 | Yes |
-| android17-6.18 | Untested |
+## Features
+
+- Start on Boot
+- Automatic soft reboot (if `late-load --soft-reboot` supported by your SU Manager)
+- RO Partition Protection
+- Disable all KernelSU modules, to recover from a broken one
+- Shizuku not needed — regain root without WiFi!
 
 ## How it works
 
 The Android kernel decrypts AES-CBC ESP packets directly into the page cache of files open for `splice()`. By crafting `IV = AES_ECB_DEC(key, current_content) ⊕ desired_content`, any 16-byte-aligned block in a mapped shared library can be overwritten without write permission and without copy-on-write.
 
-The exploit uses this primitive to patch shellcode into `libc++.so` in the kernel's page cache. The next privileged call to the hooked function runs the shellcode, which loads our custom kernel module via `insmod`. 
+The exploit uses this primitive to patch shellcode into `libc++.so` in the kernel's page cache. The next privileged call to the hooked function runs the shellcode, which loads our custom kernel module via `insmod`.
 
 ### Exploit chain
 
@@ -58,7 +54,7 @@ The exploit uses this primitive to patch shellcode into `libc++.so` in the kerne
 
 2. **splicehelper → crash_dump64** — The splicehelper binary is spliced into `crash_dump64` via the CBC primitive. `crash_dump64` runs in the `crash_dump` SELinux domain (via exec label transition), which can open `vendor_file` labeled files (untrusted_app context cannot read these files so we need this bridge). The splicehelper serves two modes: splice mode (pipe a 16-byte page chunk out to the parent for write) and read mode (`argv[3]="r"`, write 16 bytes of file content to a pipe fd for IV computation).
 
-3. **dfroot.ko → vendor_file** — The kernel module is written via the crash_dump bridge (splicehelper splice mode) into a `vendor_file`-labeled file
+3. **dfroot.ko → vendor_file** — The kernel module is written via the crash_dump bridge (splicehelper splice mode) into a `vendor_file`-labeled file.
 
 4. **libc++ hook** (fires in init, uid=0, tid=1) — Shellcode is patched into `libc++.so` at `std::ostream::sentry::sentry()` (`_ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEE6sentryC1ERS3_`). Triggered by: `createOrphanProcess()` double-forks so the grandchild is adopted by PID 1 (init); when init reaps the orphan its main thread (tid=1) calls through the hooked function. The shellcode:
    - Checks `getuid()==0` and `gettid()==1`; returns immediately otherwise
@@ -69,7 +65,9 @@ The exploit uses this primitive to patch shellcode into `libc++.so` in the kerne
 5. **dfroot.ko init** (runs as `vendor_modprobe`, uid=0) — The KO is loaded by `insmod` in the `vendor_modprobe` SELinux domain:
    - Writes `false` to `selinux_state` (global permissive)
    - Bypasses DEFEX via kprobes (if applicable)
-   - Calls `call_usermodehelper` to run our custom bootstrap code to load KernelSU LKM
+   - Calls `call_usermodehelper` to run our custom bootstrap code
+
+6. **bootstrap.c** — performs various functions and finally launches the su daemon from your installed SU Manager.
 
 ## Building
 
@@ -80,6 +78,5 @@ make
 ## Credits
 
 - Original PoC and various code: https://github.com/lsposed/lspromise
-- Selinux Permissive kernel modules and various code: https://github.com/polygraphene/DFReroot
+- SELinux Permissive kernel modules and various code: https://github.com/polygraphene/DFReroot
 - Unprivileged XFRM socket method: https://github.com/combeng6th/DirtyInit
-

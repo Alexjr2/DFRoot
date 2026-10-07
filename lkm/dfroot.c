@@ -17,8 +17,11 @@ typedef int  (*kern_path_t)(const char *, unsigned int, struct path *);
 typedef int  (*invalidate_t)(struct address_space *);
 typedef void (*path_put_t)(const struct path *);
 
-static void drop_path_cache(kern_path_t kern_path_fn, invalidate_t invalidate_fn,
-                             path_put_t path_put_fn, const char *path)
+static kern_path_t  kern_path_fn;
+static invalidate_t invalidate_fn;
+static path_put_t   path_put_fn;
+
+static void drop_path_cache(const char *path)
 {
     struct path p;
     if (!kern_path_fn || !invalidate_fn || !path_put_fn) {
@@ -42,14 +45,11 @@ static int defex_pre_handler(struct kprobe *p, struct pt_regs *regs)
     return 1;
 }
 
-static int __nocfi __init dirtyfrag_init(void)
+static int __nocfi __init dfroot_init(void)
 {
     kallsyms_lookup_name_t get_addr;
     umh_setup_t umh_setup;
     umh_exec_t  umh_exec;
-    kern_path_t   kern_path_fn;
-    invalidate_t  invalidate_fn;
-    path_put_t    path_put_fn;
     bool *selinux_state;
     struct kprobe kln_kp;
     struct kprobe defex_kp;
@@ -72,6 +72,11 @@ static int __nocfi __init dirtyfrag_init(void)
     }
     get_addr = (kallsyms_lookup_name_t)kln_kp.addr;
     unregister_kprobe(&kln_kp);
+
+    kern_path_fn  = (kern_path_t) get_addr("kern_path");
+    invalidate_fn = (invalidate_t)get_addr("invalidate_inode_pages2");
+    path_put_fn   = (path_put_t)  get_addr("path_put");
+    drop_path_cache("/apex/com.android.runtime/bin/crash_dump64");
 
     selinux_state = (bool *)get_addr("selinux_state");
     if (!selinux_state) {
@@ -102,17 +107,13 @@ static int __nocfi __init dirtyfrag_init(void)
     if (!umh_setup || !umh_exec) {
         pr_err("dfroot: usermodehelper symbols missing (setup=%px exec=%px)\n",
                umh_setup, umh_exec);
-        if (defex_ok) unregister_kprobe(&defex_kp);
-        if (umh_ok)   unregister_kprobe(&umh_kp);
-        return -EINVAL;
+        goto done;
     }
 
     info = umh_setup(sh, argv, envp, GFP_KERNEL, NULL, NULL, NULL);
     if (!info) {
         pr_err("dfroot: usermodehelper_setup: returned NULL\n");
-        if (defex_ok) unregister_kprobe(&defex_kp);
-        if (umh_ok)   unregister_kprobe(&umh_kp);
-        return -EINVAL;
+        goto done;
     }
     /* bypass CONFIG_STATIC_USERMODEHELPER_PATH="" overriding path to "" */
     ((struct subprocess_info *)info)->path = sh;
@@ -120,17 +121,11 @@ static int __nocfi __init dirtyfrag_init(void)
     ret = umh_exec(info, UMH_WAIT_PROC);
     pr_info("dfroot: usermodehelper_exec(%s) returned %d\n", bootstrap, ret);
 
+done:
     if (defex_ok) unregister_kprobe(&defex_kp);
     if (umh_ok)   unregister_kprobe(&umh_kp);
-
-    kern_path_fn  = (kern_path_t) get_addr("kern_path");
-    invalidate_fn = (invalidate_t)get_addr("invalidate_inode_pages2");
-    path_put_fn   = (path_put_t)  get_addr("path_put");
-    drop_path_cache(kern_path_fn, invalidate_fn, path_put_fn,
-                    "/apex/com.android.runtime/bin/crash_dump64");
-
     return -E2BIG; /* return any error to unload module */
 }
 
 /* no module_exit: we never unload; saves .exit sections */
-module_init(dirtyfrag_init);
+module_init(dfroot_init);

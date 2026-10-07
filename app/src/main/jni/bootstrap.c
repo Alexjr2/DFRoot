@@ -52,25 +52,27 @@ static int read_prefs(char *su_manager, size_t su_manager_size, int *soft_reboot
     return 0;
 }
 
-static void adopt_zygote_env(void)
+static int adopt_zygote_env(void)
 {
     FILE *f = popen("pidof zygote64 zygote", "r");
-    if (!f) return;
+    if (!f) return -1;
     int pid = 0;
     fscanf(f, "%d", &pid);
     pclose(f);
-    if (!pid) return;
+    if (!pid) return -1;
 
     char path[32];
     snprintf(path, sizeof(path), "/proc/%d/environ", pid);
     int fd = open(path, O_RDONLY);
-    if (fd < 0) return;
+    if (fd < 0) return -1;
     static char buf[16384];
     int n = read(fd, buf, sizeof(buf) - 1);
     close(fd);
+    if (n <= 0) return -1;
     buf[n] = '\0';
     for (char *p = buf, *end = buf + n; p < end; p += strlen(p) + 1)
         putenv(p);
+    return 0;
 }
 
 static int should_ro(const char *name)
@@ -85,11 +87,11 @@ static int should_ro(const char *name)
     return 0;
 }
 
-static void set_partitions_ro(void)
+static int set_partitions_ro(void)
 {
     DIR *dir = opendir("/dev/block/by-name");
     if (!dir)
-        return;
+        return -1;
 
     struct dirent *ent;
     while ((ent = readdir(dir))) {
@@ -112,6 +114,7 @@ static void set_partitions_ro(void)
     }
 
     closedir(dir);
+    return 0;
 }
 
 static int run(char *const argv[])
@@ -137,11 +140,11 @@ static void touch(const char *path)
 
 /* Mark every installed module disabled before ksud runs. A broken module
  * otherwise loads on the next boot and bootloops the device. */
-static void disable_modules(void)
+static int disable_modules(void)
 {
     DIR *dir = opendir(MODULES_DIR);
     if (!dir)
-        return;
+        return -1;
 
     struct dirent *ent;
     while ((ent = readdir(dir))) {
@@ -152,6 +155,7 @@ static void disable_modules(void)
         touch(path);
     }
     closedir(dir);
+    return 0;
 }
 
 int main(void)
@@ -159,19 +163,25 @@ int main(void)
     char su_manager[256];
     int soft_reboot, disable_mods;
     if (read_prefs(su_manager, sizeof(su_manager), &soft_reboot, &disable_mods) != 0) {
-        touch("/dev/dfm6");
+        touch("/dev/dfme0");
         return 1;
     }
     touch("/dev/dfm1");
 
-    adopt_zygote_env();
-    touch("/dev/dfm2");
+    touch("/dev/dfm7");
+    if (adopt_zygote_env() == 0)
+        touch("/dev/dfm2");
+    else
+        touch("/dev/dfmw0");
 
-    set_partitions_ro();
-    touch("/dev/dfm3");
+    touch("/dev/dfm8");
+    if (set_partitions_ro() == 0)
+        touch("/dev/dfm3");
+    else
+        touch("/dev/dfmw1");
 
-    if (disable_mods)
-        disable_modules();
+    if (disable_mods && disable_modules() != 0)
+        touch("/dev/dfmw2");
 
     char **late_load;
     if (soft_reboot)
@@ -181,7 +191,7 @@ int main(void)
     if (run(late_load) == 0)
         touch("/dev/dfm4");
     else
-        touch("/dev/dfm5");
+        touch("/dev/dfme1");
 
     return 0;
 }

